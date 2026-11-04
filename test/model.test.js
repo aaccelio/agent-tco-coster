@@ -1,96 +1,71 @@
 const assert = require('node:assert');
 const path = require('node:path');
-const DEFAULTS = require(path.join(__dirname, '..', 'js', 'defaults.js'));
-const MODEL = require(path.join(__dirname, '..', 'js', 'model.js'));
+const C = require(path.join(__dirname, '..', 'js', 'catalog.js'));
+const M = require(path.join(__dirname, '..', 'js', 'model.js'));
 
-const p = DEFAULTS.collectDefaults();
-const r = MODEL.compute(p);
-
-function close(actual, expected, tol = 1e-6, label = '') {
-  assert.ok(Math.abs(actual - expected) <= tol * Math.max(1, Math.abs(expected)),
+function close(actual, expected, tol = 1e-9, label = '') {
+  assert.ok(Number.isFinite(actual) && Math.abs(actual - expected) <= tol * Math.max(1, Math.abs(expected)),
     `${label}: expected ${expected}, got ${actual}`);
 }
 
-assert.strictEqual(r.benefits.baselineHours, 240, 'baseline hours');
-close(r.benefits.grossGain, 180, 1e-9, 'gross gain');
-close(r.benefits.pdeGross, 95.625, 1e-9, 'PDE gross');
-close(r.benefits.tsaGross, 84.375, 1e-9, 'TSA gross');
-assert.strictEqual(r.benefits.reviewHours, 48, 'review hours');
-close(r.benefits.pdeNet, 47.625, 1e-9, 'PDE net');
-close(r.benefits.tsaNet, 84.375, 1e-9, 'TSA net');
-close(r.benefits.netChain, 132, 1e-9, 'chain net hours');
-close(r.benefits.pdeBenefit, 1190.625, 1e-9, 'PDE benefit');
-close(r.benefits.tsaBenefit, 2109.375, 1e-9, 'TSA benefit');
-close(r.benefits.timeBenefit, 3300, 1e-9, 'time benefit');
+const p = C.collectDefaults();
 
-close(r.credits.aiCalls, 160000, 1e-12, 'AI calls');
-close(r.credits.tokensTotal, 160000000, 1e-12, 'tokens legacy');
-close(r.credits.creditsAI, 240000, 1e-9, 'credits IA');
-close(r.credits.creditsCostEUR, 2208, 1e-9, 'credits cost EUR');
+let m1 = M.computeMonth(p, 1);
+assert.ok(m1.total > 0, 'month 1 has a positive cost');
+assert.strictEqual(m1.lines.length, C.LINES.length, 'all cost lines emitted');
+close(M.lineAmount(m1, 'license_pa_premium'), 5 * 17.3, 1e-12, 'PA premium 5 users');
+close(M.lineAmount(m1, 'build'), 0, 1e-12, 'no build by default');
 
-close(r.licenses.licensesPA, 622.8, 1e-9, 'Power Apps Premium');
-close(r.storage.capacityAtMaturity, 50, 1e-9, 'capacity at maturity');
-close(r.storage.storageCostEUR, 15000, 1e-9, 'storage cost');
-assert.strictEqual(r.storage.trajectory.length, 5, 'trajectory years');
-close(r.storage.trajectory[2].annualCost, 9000, 1e-9, 'year 3 cost');
-close(r.storage.trajectory[4].annualCost, 15000, 1e-9, 'year 5 cost');
+const p2 = Object.assign({}, p, { build_cost: 10000, other_monthly_cost: 100 });
+close(M.lineAmount(M.computeMonth(p2, 1), 'build'), 10000, 1e-12, 'build in month 1 only');
+close(M.lineAmount(M.computeMonth(p2, 2), 'build'), 0, 1e-12, 'build not in month 2');
+close(M.lineAmount(M.computeMonth(p2, 2), 'run_other'), 100, 1e-12, 'other run cost monthly');
 
-close(r.results.annualCost, 17830.8, 1e-9, 'annual cost');
-close(r.results.netBase, -14530.8, 1e-9, 'net base');
-close(r.results.roiBase, -0.8149269802813109, 1e-9, 'ROI base');
-close(r.results.breakevenShare, 0.0036327, 1e-4, 'breakeven share');
-close(r.results.costPDE, 2208, 1e-9, 'PDE cost');
-close(r.results.resultPDE, -1017.375, 1e-9, 'PDE result');
-close(r.results.costTSAShared, 15622.8, 1e-9, 'TSA cost');
-close(r.results.resultTSA, -13513.425, 1e-9, 'TSA result');
-close(r.results.savingsAttributedTarget, 600000, 1e-9, 'target scenario savings');
-close(r.results.totalBenefitTarget, 603300, 1e-9, 'target benefit');
-close(r.results.netTarget, 585469.2, 1e-9, 'target net');
-close(r.results.roiTarget, 32.83471296857123, 1e-9, 'target ROI');
-close(r.results.benefitCostTarget, 33.83471296857124, 1e-9, 'benefit/cost target');
+const p3 = Object.assign({}, p, { messages_per_month: 1200, meta_prompt_tokens: 500, rag_context_tokens: 500, history_tokens: 0, user_input_tokens: 0, output_tokens_per_message: 1000, credits_per_1k_input: 2, credits_per_1k_output: 4 });
+const m3 = M.computeMonth(p3, 1);
+close(m3.credits.tokensIn, 1200 * 1000, 1e-12, 'input tokens');
+close(m3.credits.tokensOut, 1200 * 1000, 1e-12, 'output tokens');
+close(m3.credits.totalCredits, 1200 * 1000 / 1000 * 2 + 1200 * 1000 / 1000 * 4, 1e-12, 'credits in+out');
+close(m3.billing.paygEUR, m3.credits.totalCredits * 0.01 * 0.92, 1e-12, 'payg EUR');
 
-const sens = MODEL.standardSensitivities(p);
-close(sens.aiLines[0].res.credits.creditsCostEUR, 1380, 1e-9, 'sens 50k credits cost');
-close(sens.aiLines[2].res.credits.creditsCostEUR, 4968, 1e-9, 'sens 180k credits cost');
-close(sens.aiLines[0].res.results.annualCost, 17002.8, 1e-9, 'sens 50k annual');
-close(sens.aiLines[2].res.results.annualCost, 20590.8, 1e-9, 'sens 180k annual');
-close(sens.avoidable[0].hoursNet, 72, 1e-9, 'avoidable 50% hours');
-close(sens.avoidable[2].hoursNet, 192, 1e-9, 'avoidable 100% hours');
-close(sens.passes[1].res.results.annualCost, 20038.8, 1e-9, '4 passes annual');
-close(sens.storageYears[0].res.storage.storageCostEUR, 9000, 1e-9, 'storage 3y');
+const pPre = Object.assign({}, p3, { billing_mode: 'prepaid' });
+const mPre = M.computeMonth(pPre, 1);
+assert.strictEqual(mPre.billing.packs, Math.ceil(mPre.credits.totalCredits / 25000), 'prepaid packs rounded up');
+close(mPre.billing.prepaidEUR, mPre.billing.packs * 200 * 0.92, 1e-12, 'prepaid EUR');
 
-const grid = MODEL.savingsGridFixed(p);
-close(grid[2]['real_1'].savings, 40000, 1e-9, 'grid 1% x 100%');
-close(grid[2]['real_1'].net, 25469.2, 1e-9, 'grid 1% net');
-close(grid[4]['real_1'].net, 3985469.2, 1e-9, 'grid 100% net');
-close(grid[1]['real_1'].roi, -0.5905960472889606, 1e-9, 'grid 0.1% ROI');
+const p4 = Object.assign({}, p, { pa_premium_users: 10, ramp_months: 6 });
+close(M.computeMonth(p4, 1).lines.find(l => l.id === 'license_pa_premium').users, 10 / 6, 1e-12, 'ramp month 1');
+close(M.computeMonth(p4, 6).lines.find(l => l.id === 'license_pa_premium').users, 10, 1e-12, 'ramp full at month 6');
+close(M.computeMonth(p4, 12).lines.find(l => l.id === 'license_pa_premium').users, 10, 1e-12, 'ramp capped');
 
-const split = MODEL.compute(Object.assign({}, p, {
-  token_mode: 'split', meta_prompt_tokens: 800, rag_context_tokens: 4000,
-  history_tokens: 1500, user_input_tokens: 300, output_tokens_per_message: 500,
-  credits_per_1k_input: 1.5, credits_per_1k_output: 3.0
-}));
-close(split.credits.tokensInput, 160000 * 6600, 1e-9, 'split input tokens');
-close(split.credits.tokensOutput, 160000 * 500, 1e-9, 'split output tokens');
-close(split.credits.creditsInput, 160000 * 6.6 * 1.5, 1e-9, 'split input credits');
-close(split.credits.creditsOutput, 160000 * 0.5 * 3.0, 1e-9, 'split output credits');
+const p5 = Object.assign({}, p, { storage_initial_gb: 10, storage_gb_per_month: 2 });
+close(M.computeMonth(p5, 1).gb, 12, 1e-12, 'gb month 1 = initial + growth×m');
+close(M.computeMonth(p5, 12).gb, 34, 1e-12, 'gb month 12');
 
-const prepaid = MODEL.compute(Object.assign({}, p, { billing_mode: 'prepaid' }));
-close(prepaid.credits.packsPerMonth, 1, 1e-9, 'packs per month (240k/12=20k -> 1 pack)');
-close(prepaid.credits.creditsCostPrepaidEUR, 200 * 12 * 0.92, 1e-9, 'prepaid annual EUR');
+const p6 = Object.assign({}, p, { horizon_years: 3 });
+const proj = M.project(p6);
+assert.strictEqual(proj.months.length, 36, '36 months');
+assert.strictEqual(proj.years.length, 3, '3 years');
+close(proj.total, proj.months.reduce((s, x) => s + x.total, 0), 1e-12, 'TCO = sum of months');
+close(proj.years.reduce((s, y) => s + y.total, 0), proj.total, 1e-12, 'years sum = TCO');
 
-const excluded = MODEL.compute(p, { power_apps: 'écarté', dataverse: 'écarté' });
-close(excluded.licenses.licensesPA, 0, 1e-12, 'excluded PA licenses zeroed');
-close(excluded.storage.storageCostEUR, 0, 1e-12, 'excluded storage zeroed');
-close(excluded.results.annualCost, 17830.8 - 622.8 - 15000, 1e-9, 'annual cost with exclusions');
+const s = M.summarize(p6);
+close(s.runAnnual, proj.months[35].total * 12, 1e-12, 'runAnnual = last month × 12');
+assert.strictEqual(s.breakeven, null, 'breakeven null without savings target');
 
-const sources = MODEL.sourcesTable(p, r);
-assert.strictEqual(sources.length, DEFAULTS.PARAMS.length, 'sources table covers all params');
-assert.ok(sources.every(s => s.status && s.source), 'every param has source + status');
+const excl = M.summarize(p6, { power_apps: 'écarté', dataverse: 'écarté' });
+close(M.lineAmount(excl.last, 'license_pa_premium'), 0, 1e-12, 'excluded component zeroed');
+close(M.lineAmount(excl.last, 'storage_dataverse'), 0, 1e-12, 'excluded storage zeroed');
+assert.ok(excl.runAnnual < s.runAnnual, 'exclusion lowers cost');
 
-console.log('All model tests passed.');
-console.log('Reference reproduction: annualCost=€' + r.results.annualCost.toFixed(2) +
-  ', net=' + r.results.netBase.toFixed(2) +
-  ', ROI=' + (r.results.roiBase * 100).toFixed(2) + '%' +
-  ', target net=' + r.results.netTarget.toFixed(2) +
-  ', target ROI=' + r.results.roiTarget.toFixed(2));
+const sc = M.scenarios(p6);
+assert.strictEqual(sc.length, 3, '3 scenarios');
+assert.ok(sc[0].runAnnual <= sc[1].runAnnual && sc[1].runAnnual <= sc[2].runAnnual, 'scenario ordering low≤base≤high');
+
+const sens = M.sensitivity(p6, 'messages_per_month', [1000, 10000]);
+assert.ok(sens[1].runAnnual > sens[0].runAnnual, 'more messages → higher cost');
+
+const grid = M.savingsGrid(Object.assign({}, p6, { opex_base: 1000000, savings_target_rate: 0.05 }), [0, 1], [0, 1]);
+close(grid[1]['real_1'].savings, 50000, 1e-9, 'grid savings 100%×100%');
+
+console.log('All generic model tests passed.');
