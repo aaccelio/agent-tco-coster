@@ -1,283 +1,250 @@
 (function (root, factory) {
-  const defaults = (typeof module !== 'undefined' && module.exports)
-    ? require('./defaults.js')
-    : root.AgentCostDefaults;
-  const api = factory(defaults);
-  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+  const isNode = typeof module !== 'undefined' && module.exports;
+  const catalog = isNode ? require('./catalog.js') : root.AgentCostCatalog;
+  const fixtures = isNode ? require('./fixtures.js') : root.AgentCostFixtures;
+  const api = factory(catalog, fixtures);
+  if (isNode) module.exports = api;
   root.AgentCostModel = api;
-})(typeof self !== 'undefined' ? self : globalThis, function (DEFAULTS) {
+})(typeof self !== 'undefined' ? self : globalThis, function (CATALOG, FIXTURES) {
   const EPS = 1e-9;
 
-  function num(v) {
-    const n = Number(v);
-    return Number.isFinite(n) ? n : 0;
-  }
+  const num = v => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+  const clone = p => Object.assign({}, p);
 
-  function clone(p) {
-    return Object.assign({}, p);
-  }
+  function collectDefaults() { return CATALOG.collectDefaults(); }
 
-  function line(id, label, component, amount, formula, note) {
-    return { id, label, component, amount, formula, note: note || '' };
-  }
+  function lineMeta(id) { return CATALOG.lineById(id) || { id, label: id, component: '', category: '', behavior: 'variable', formula: '' }; }
 
-  function compute(rawParams, componentStatuses) {
-    const p = Object.assign(DEFAULTS.collectDefaults(), rawParams || {});
-    const statuses = componentStatuses || {};
-    const excluded = id => statuses[id] === 'écarté';
-
+  function computeMonth(rawParams, m, statuses) {
+    const p = Object.assign(collectDefaults(), rawParams || {});
+    const st = statuses || {};
+    const excluded = cid => st[cid] === 'écarté';
+    m = Math.max(1, Math.floor(m));
     const fx = num(p.fx_eur_per_usd);
-    const toEUR = (usd, currency) => num(usd) * (currency === 'USD' ? fx : 1);
+    const usd2eur = v => v * fx;
+    const ramp = num(p.ramp_months) > 0 ? Math.min(1, m / num(p.ramp_months)) : 1;
 
-    const r = { params: p, lines: [], warnings: [] };
-
-    const baselineHours = num(p.manual_analyses_per_year) * num(p.hours_per_analysis);
-    const grossGain = baselineHours * num(p.avoidable_share);
-    const pdeGross = grossGain * num(p.pde_share);
-    const tsaGross = grossGain - pdeGross;
-    const reviewHours = num(p.lots_per_year) * num(p.review_days_per_quarter) * num(p.review_hours_per_day);
-    const pdeNet = pdeGross - reviewHours;
-    const tsaNet = tsaGross;
-    const netChain = pdeNet + tsaNet;
-    const pdeBenefit = pdeNet * num(p.loaded_hourly_cost) * num(p.capture_rate);
-    const tsaBenefit = tsaNet * num(p.loaded_hourly_cost) * num(p.capture_rate);
-    const timeBenefit = pdeBenefit + tsaBenefit;
-
-    r.benefits = {
-      baselineHours, grossGain, pdeGross, tsaGross, reviewHours,
-      pdeNet, tsaNet, netChain, pdeBenefit, tsaBenefit, timeBenefit
+    const lines = [];
+    const addLine = (id, amount, detail) => {
+      const meta = lineMeta(id);
+      const amt = excluded(meta.component) ? 0 : amount;
+      lines.push(Object.assign({
+        id, label: meta.label, component: meta.component,
+        category: meta.category, behavior: meta.behavior, formula: meta.formula, amount: amt
+      }, detail || {}));
     };
 
-    const aiCalls = num(p.unresolved_lines_per_pass) * num(p.passes_per_year);
-    const linesPerBatch = num(p.terminals) * num(p.lines_per_terminal_per_quarter);
+    const usersPA = num(p.pa_premium_users) * ramp;
+    const usersPAF = num(p.paf_premium_users) * ramp;
+    const usersM365 = num(p.m365_copilot_users) * ramp;
+    const usersCS = num(p.cs_maker_users) * ramp;
+    addLine('license_pa_premium', usersPA * num(p.pa_premium_price), { users: usersPA });
+    addLine('license_paf_premium', usd2eur(usersPAF * num(p.paf_premium_price)), { users: usersPAF });
+    addLine('license_m365', usd2eur(usersM365 * num(p.m365_copilot_price)), { users: usersM365 });
+    addLine('license_cs_maker', usd2eur(usersCS * num(p.cs_maker_price)), { users: usersCS });
 
-    let tokensInput = 0, tokensOutput = 0, tokensTotal = 0;
-    let creditsInput = null, creditsOutput = null, creditsAI = 0, creditsFixed = 0;
-    let tokenDetail = null;
-    if (p.token_mode === 'split') {
-      const meta = num(p.meta_prompt_tokens);
-      const rag = num(p.rag_context_tokens);
-      const hist = num(p.history_tokens);
-      const user = num(p.user_input_tokens);
-      const out = num(p.output_tokens_per_message);
-      const inputPerMsg = meta + rag + hist + user;
-      tokensInput = aiCalls * inputPerMsg;
-      tokensOutput = aiCalls * out;
-      tokensTotal = tokensInput + tokensOutput;
-      creditsInput = tokensInput / 1000 * num(p.credits_per_1k_input);
-      creditsOutput = tokensOutput / 1000 * num(p.credits_per_1k_output);
-      creditsFixed = aiCalls * num(p.fixed_credits_per_message);
-      creditsAI = creditsInput + creditsOutput + creditsFixed;
-      tokenDetail = { meta, rag, hist, user, inputPerMsg, out };
-    } else {
-      tokensTotal = aiCalls * num(p.tokens_per_call);
-      creditsAI = tokensTotal / 1000 * num(p.credits_per_1k_tokens);
-      tokenDetail = { mode: 'legacy', tokensPerCall: num(p.tokens_per_call) };
-    }
+    const messages = num(p.messages_per_month);
+    const tokensIn = messages * (num(p.meta_prompt_tokens) + num(p.rag_context_tokens) + num(p.history_tokens) + num(p.user_input_tokens));
+    const tokensOut = messages * num(p.output_tokens_per_message);
+    const cTokIn = tokensIn / 1000 * num(p.credits_per_1k_input);
+    const cTokOut = tokensOut / 1000 * num(p.credits_per_1k_output);
+    const cFixed = messages * num(p.fixed_credits_per_message);
+    const cTokens = cTokIn + cTokOut + cFixed;
+    const cActions = num(p.runs_per_month) * num(p.agent_actions_per_run) * num(p.credits_per_agent_action);
+    const cAI = num(p.ai_builder_items_per_month) * num(p.ai_builder_credits_per_item);
+    const totalCredits = cTokens + cActions + cAI;
 
-    const agentActionCredits = num(p.agent_flow_actions_per_pass) * num(p.passes_per_year) * num(p.credits_per_agent_action);
-    const aiBuilderCredits = num(p.ai_builder_items_per_year) * num(p.ai_builder_credits_per_item);
-    const totalCredits = creditsAI + agentActionCredits + aiBuilderCredits;
+    const paygEUR = totalCredits * num(p.payg_price_per_credit) * fx;
+    const packs = totalCredits > EPS ? Math.ceil(totalCredits / Math.max(EPS, num(p.prepaid_pack_credits))) : 0;
+    const prepaidEUR = packs * num(p.prepaid_pack_price) * fx;
+    const modeEUR = p.billing_mode === 'prepaid' ? prepaidEUR : paygEUR;
+    const share = part => totalCredits > EPS ? modeEUR * part / totalCredits : 0;
+    addLine('credits_tokens', share(cTokens), { credits: cTokens, creditsIn: cTokIn, creditsOut: cTokOut, creditsFixed: cFixed });
+    addLine('credits_agent_actions', share(cActions), { credits: cActions });
+    addLine('credits_ai_builder', share(cAI), { credits: cAI });
 
-    const creditsCostPaygEUR = totalCredits * num(p.payg_price_per_credit_usd) * fx;
-    const monthlyCredits = totalCredits / 12;
-    const packsPerMonth = Math.ceil(monthlyCredits / Math.max(EPS, num(p.prepaid_pack_credits)));
-    const creditsCostPrepaidEUR = packsPerMonth * num(p.prepaid_pack_price_usd) * 12 * fx;
-    let creditsCostEUR = creditsCostPaygEUR;
-    if (p.billing_mode === 'prepaid') creditsCostEUR = creditsCostPrepaidEUR;
-    r.credits = {
-      aiCalls, linesPerBatch, tokensInput, tokensOutput, tokensTotal,
-      creditsInput, creditsOutput, creditsFixed, creditsAI, agentActionCredits,
-      aiBuilderCredits, totalCredits, creditsCostPaygEUR, creditsCostPrepaidEUR,
-      creditsCostEUR, packsPerMonth, tokenDetail
-    };
+    addLine('payg_capacity', num(p.payg_capacity_units) * usd2eur(num(p.payg_capacity_price)));
 
-    const licensesPA = excluded('power_apps') ? 0 : num(p.power_apps_premium_users) * num(p.power_apps_premium_price) * 12;
-    const licensesPAF = excluded('power_automate') ? 0 : num(p.power_automate_premium_users) * toEUR(num(p.power_automate_premium_price), paramCurrency('power_automate_premium_price')) * 12;
-    const licensesM365 = excluded('cs_agent') ? 0 : num(p.m365_copilot_users) * toEUR(num(p.m365_copilot_price), paramCurrency('m365_copilot_price')) * 12;
-    const licensesCS = excluded('cs_agent') ? 0 : num(p.copilot_studio_maker_users) * toEUR(num(p.copilot_studio_maker_price), paramCurrency('copilot_studio_maker_price')) * 12;
-    const paygCapacityEUR = excluded('copilot_credits') ? 0 : num(p.payg_capacity_units) * num(p.payg_capacity_usd_per_month) * 12 * fx;
-    const licensesTotal = licensesPA + licensesPAF + licensesM365 + licensesCS;
-    r.licenses = { licensesPA, licensesPAF, licensesM365, licensesCS, paygCapacityEUR, licensesTotal };
+    const gb = num(p.storage_initial_gb) + num(p.storage_gb_per_month) * m;
+    addLine('storage_dataverse', gb * num(p.dataverse_price_per_gb_month), { gb });
+    addLine('storage_sharepoint', usd2eur(num(p.sharepoint_extra_gb) * num(p.sharepoint_price_per_gb_month)));
 
-    const retentionYears = Math.max(1, num(p.retention_years));
-    const incrementalGB = num(p.provisioned_capacity_gb) / retentionYears;
-    const maturityYears = Math.min(Math.max(1, num(p.storage_maturity_years)), retentionYears);
-    const capacityAtMaturity = incrementalGB * maturityYears;
-    const storageCostEUR = excluded('dataverse') ? 0 : capacityAtMaturity * num(p.dataverse_price_per_gb_month) * 12;
-    const sharepointCostEUR = excluded('sharepoint') ? 0 : num(p.sharepoint_extra_gb) * toEUR(num(p.sharepoint_price_per_gb_month), paramCurrency('sharepoint_price_per_gb_month')) * 12;
-    const trajectory = [];
-    for (let y = 1; y <= retentionYears; y++) {
-      const cap = incrementalGB * y;
-      trajectory.push({ year: y, capacityGB: cap, annualCost: cap * num(p.dataverse_price_per_gb_month) * 12 });
-    }
-    r.storage = {
-      retentionYears, incrementalGB, maturityYears, capacityAtMaturity,
-      storageCostEUR, sharepointCostEUR, storageTotalEUR: storageCostEUR + sharepointCostEUR,
-      pricePerGBMonth: num(p.dataverse_price_per_gb_month), trajectory
-    };
+    addLine('run_other', num(p.other_monthly_cost));
+    addLine('build', m === 1 ? num(p.build_cost) : 0);
 
-    const otherFlowsEUR = excluded('power_automate') ? 0 : num(p.other_flow_costs_per_year);
-    const buildCostEUR = excluded('env') ? 0 : num(p.build_cost);
-    r.run = { otherFlowsEUR, buildCostEUR };
+    const fixedTotal = lines.filter(l => l.behavior === 'fixed').reduce((s, l) => s + l.amount, 0);
+    const variableTotal = lines.filter(l => l.behavior === 'variable').reduce((s, l) => s + l.amount, 0);
+    const creditsEUR = lines.filter(l => l.category === 'credits').reduce((s, l) => s + l.amount, 0);
 
-    const costCreditsAI = excluded('cs_agent') ? 0 : creditsCostEUR;
-    const costAgentActions = excluded('power_automate') ? 0 : 0;
-    const costPaygCapacity = paygCapacityEUR;
-
-    const annualCost = costCreditsAI + licensesTotal + costPaygCapacity + r.storage.storageTotalEUR + otherFlowsEUR + buildCostEUR;
-    const annualCostRun = costCreditsAI + licensesTotal + costPaygCapacity + r.storage.storageTotalEUR + otherFlowsEUR;
-
-    const targetSavings = num(p.opex_base) * num(p.savings_target_rate);
-    const savingsAttributedBase = targetSavings * num(p.attributable_share_base);
-    const totalBenefitBase = timeBenefit + savingsAttributedBase;
-    const netBase = totalBenefitBase - annualCost;
-    const roiBase = annualCost > EPS ? netBase / annualCost : null;
-    const breakevenShare = targetSavings > EPS ? Math.max(0, (annualCost - timeBenefit) / targetSavings) : null;
-
-    const savingsAttributedTarget = targetSavings * num(p.attributable_share_target);
-    const totalBenefitTarget = timeBenefit + savingsAttributedTarget;
-    const netTarget = totalBenefitTarget - annualCost;
-    const roiTarget = annualCost > EPS ? netTarget / annualCost : null;
-    const benefitCostTarget = annualCost > EPS ? totalBenefitTarget / annualCost : null;
-
-    const costPDE = costCreditsAI;
-    const resultPDE = pdeBenefit - costPDE;
-    const costTSAShared = licensesTotal + costPaygCapacity + r.storage.storageTotalEUR + otherFlowsEUR + buildCostEUR;
-    const resultTSA = tsaBenefit - costTSAShared;
-
-    const totalUsers = num(p.power_apps_premium_users) + num(p.power_automate_premium_users) + num(p.m365_copilot_users) + num(p.copilot_studio_maker_users);
-
-    r.results = {
-      annualCost, annualCostRun, monthlyCost: annualCost / 12,
-      targetSavings, savingsAttributedBase, totalBenefitBase, netBase, roiBase, breakevenShare,
-      savingsAttributedTarget, totalBenefitTarget, netTarget, roiTarget, benefitCostTarget,
-      costPDE, resultPDE, costTSAShared, resultTSA,
-      costPerAICall: aiCalls > EPS ? annualCost / aiCalls : null,
-      costPer1kTokens: tokensTotal > EPS ? annualCost / (tokensTotal / 1000) : null,
-      costPerUser: totalUsers > EPS ? annualCost / totalUsers : null,
-      costPerTerminal: num(p.terminals) > EPS ? annualCost / num(p.terminals) : null,
-      totalUsers, aiCalls,
-      buildAmortizedPerYear: num(p.horizon_years) > EPS ? buildCostEUR / num(p.horizon_years) : 0
-    };
-
-    r.lines = buildLines(r, p);
-    return r;
-  }
-
-  function paramCurrency(id) {
-    const def = DEFAULTS.paramById(id);
-    return def && def.currency ? def.currency : 'EUR';
-  }
-
-  function buildLines(r, p) {
-    const fx = num(p.fx_eur_per_usd);
-    const L = [];
-    const c = r.credits, s = r.storage, l = r.licenses;
-    L.push(line('timeBenefit', 'Time benefit captured (€/yr)', 'scope', r.benefits.timeBenefit, `${r.benefits.netChain.toFixed(2)} h × ${p.loaded_hourly_cost} €/h × ${fmtPct(p.capture_rate)}`, 'Benefit, not a cost'));
-    L.push(line('creditsAI', `Copilot Credits — AI tokens/messages (${c.totalCredits.toFixed(0)} credits)`, 'cs_agent', r.results.annualCost >= 0 ? c.creditsCostEUR : 0, c.tokensTotal > 0 ? `${c.tokensTotal.toFixed(0)} tok / 1000 × rate × $${p.payg_price_per_credit_usd}/credit × ${fx} €/$` : 'no AI calls', 'PAYG price path; see prepaid comparison'));
-    L.push(line('agentActions', 'Agent-flow action credits', 'power_automate', c.agentActionCredits * num(p.payg_price_per_credit_usd) * fx, `${p.agent_flow_actions_per_pass} actions/pass × ${p.passes_per_year} passes × ${p.credits_per_agent_action} credits`, 'Included in credits total above when > 0'));
-    L.push(line('aiBuilder', 'AI Builder credits', 'ai_builder', c.aiBuilderCredits * num(p.payg_price_per_credit_usd) * fx, `${p.ai_builder_items_per_year} items × ${p.ai_builder_credits_per_item} credits`, 'Included in credits total above when > 0'));
-    L.push(line('paygCapacity', 'Copilot Studio PAYG tenant capacity', 'copilot_credits', l.paygCapacityEUR, `${p.payg_capacity_units} units × $${p.payg_capacity_usd_per_month}/mo × 12 × ${fx}`, 'Only if tenant capacity is provisioned'));
-    L.push(line('licensesPA', `Power Apps Premium (${p.power_apps_premium_users} users)`, 'power_apps', l.licensesPA, `${p.power_apps_premium_users} × ${p.power_apps_premium_price} €/user/mo × 12`, 'Public FR price HT'));
-    L.push(line('licensesPAF', `Power Automate Premium (${p.power_automate_premium_users} users)`, 'power_automate', l.licensesPAF, `${p.power_automate_premium_users} × $${p.power_automate_premium_price}/user/mo × 12 × ${fx}`, ''));
-    L.push(line('licensesM365', `M365 Copilot consumers (${p.m365_copilot_users} users)`, 'cs_agent', l.licensesM365, `${p.m365_copilot_users} × $${p.m365_copilot_price}/user/mo × 12 × ${fx}`, 'Agent published in M365 channel'));
-    L.push(line('licensesCS', `Copilot Studio maker users (${p.copilot_studio_maker_users})`, 'cs_agent', l.licensesCS, `${p.copilot_studio_maker_users} × $${p.copilot_studio_maker_price}/user/mo × 12 × ${fx}`, 'Price only if contractually confirmed'));
-    L.push(line('storage', `Dataverse storage at maturity (${s.capacityAtMaturity.toFixed(0)} Go @ year ${s.maturityYears})`, 'dataverse', s.storageCostEUR, `${s.capacityAtMaturity.toFixed(1)} Go × ${s.pricePerGBMonth} €/Go/mo × 12`, 'Provision to qualify: base/log/files'));
-    L.push(line('sharepointStorage', 'Extra SharePoint storage', 'sharepoint', s.sharepointCostEUR, `${p.sharepoint_extra_gb} Go × $${p.sharepoint_price_per_gb_month}/Go/mo × 12 × ${fx}`, 'Beyond included quota only'));
-    L.push(line('otherFlows', 'Other flow / run costs provisioned', 'power_automate', r.run.otherFlowsEUR, 'flat provision', 'To qualify — not assumed zero in reality'));
-    L.push(line('build', 'Build cost (one-time, year 1)', 'env', r.run.buildCostEUR, 'flat', `Amortized over ${p.horizon_years} years: ${r.results.buildAmortizedPerYear.toFixed(2)} €/yr`));
-    return L;
-  }
-
-  function fmtPct(v) {
-    return (num(v) * 100).toFixed(1) + '%';
-  }
-
-  function sensitivity(p, id, values, pick) {
-    return values.map(v => {
-      const q = clone(p);
-      q[id] = v;
-      const res = compute(q);
-      const row = { value: v };
-      for (const key of pick || ['annualCost', 'netBase', 'roiBase']) {
-        const parts = key.split('.');
-        let obj = res.results;
-        for (const part of parts) obj = obj ? obj[part] : undefined;
-        row[key] = typeof obj === 'object' && obj !== null && 'amount' in obj ? obj.amount : obj;
-      }
-      row.res = res;
-      return row;
-    });
-  }
-
-  function sensitivityGrid(p, idX, valuesX, idY, valuesY, fn) {
-    return valuesY.map(y => {
-      const row = { y };
-      for (const x of valuesX) {
-        const q = clone(p);
-        q[idX] = x;
-        q[idY] = y;
-        row['x_' + x] = fn(compute(q), x, y);
-      }
-      return row;
-    });
-  }
-
-  function standardSensitivities(p) {
     return {
-      aiLines: sensitivity(p, 'unresolved_lines_per_pass', [50000, 80000, 180000], ['annualCost', 'netBase', 'breakevenShare']),
-      avoidable: sensitivity(p, 'avoidable_share', [0.5, 0.75, 1], ['netBase', 'roiBase']).map(rw => {
-        rw.hoursNet = rw.res.benefits.netChain;
-        rw.timeBenefit = rw.res.benefits.timeBenefit;
-        return rw;
-      }),
-      passes: sensitivity(p, 'passes_per_year', [2, 4], ['annualCost', 'netBase']),
-      tokenPrice: sensitivity(p, 'credits_per_1k_tokens', [0.5, 1.5, 3], ['annualCost', 'netBase']),
-      metaPrompt: sensitivity(p, 'meta_prompt_tokens', [0, 800, 2000, 5000], ['annualCost']).map(rw => {
-        rw.credits = rw.res.credits.totalCredits;
-        return rw;
-      }),
-      storageYears: sensitivity(p, 'storage_maturity_years', [3, 5], ['annualCost']).map(rw => {
-        rw.capacityGB = rw.res.storage.capacityAtMaturity;
-        rw.storageEUR = rw.res.storage.storageCostEUR;
-        return rw;
-      }),
-      licenses: sensitivity(p, 'power_apps_premium_users', [0, 3, 6], ['annualCost', 'netBase']),
-      savingsGrid: sensitivityGrid(p, 'savings_target_rate_realized', [0, 0.5, 1], 'attributable_share_grid', [0, 0.001, 0.01, 0.05, 1], (res) => res.results.netBase)
+      month: m, lines, fixedTotal, variableTotal, creditsEUR, total: fixedTotal + variableTotal,
+      credits: { tokensIn, tokensOut, cTokIn, cTokOut, cFixed, cTokens, cActions, cAI, totalCredits },
+      messages, gb, ramp,
+      users: usersPA + usersPAF + usersM365 + usersCS,
+      billing: { paygEUR, prepaidEUR, packs, mode: p.billing_mode }
     };
   }
 
-  function savingsGridFixed(p) {
+  function project(rawParams, statuses) {
+    const p = Object.assign(collectDefaults(), rawParams || {});
+    const monthsN = Math.max(1, Math.round(num(p.horizon_years))) * 12;
+    const months = [];
+    for (let m = 1; m <= monthsN; m++) months.push(computeMonth(p, m, statuses));
+    const years = [];
+    for (let y = 0; y < monthsN / 12; y++) {
+      const slice = months.slice(y * 12, (y + 1) * 12);
+      years.push({
+        year: y + 1,
+        total: slice.reduce((s, x) => s + x.total, 0),
+        fixed: slice.reduce((s, x) => s + x.fixedTotal, 0),
+        variable: slice.reduce((s, x) => s + x.variableTotal, 0),
+        creditsEUR: slice.reduce((s, x) => s + x.creditsEUR, 0),
+        credits: slice.reduce((s, x) => s + x.credits.totalCredits, 0)
+      });
+    }
+    return { months, years, monthsN, total: months.reduce((s, x) => s + x.total, 0) };
+  }
+
+  function annualizedAtMonth(rawParams, m, statuses) {
+    return computeMonth(rawParams, m, statuses).total * 12;
+  }
+
+  function lineAmount(monthRes, lineId) {
+    const l = monthRes.lines.find(x => x.id === lineId);
+    return l ? l.amount : 0;
+  }
+
+  function summarize(rawParams, statuses) {
+    const p = Object.assign(collectDefaults(), rawParams || {});
+    const proj = project(p, statuses);
+    const last = proj.months[proj.months.length - 1];
+    const year1 = proj.years[0];
+    const runAnnual = last.total * 12;
+
+    const baseline = num(p.baseline_hours_per_year);
+    const gross = baseline * num(p.avoidable_share);
+    const netH = gross - num(p.review_hours_per_year);
+    const timeBenefit = netH * num(p.loaded_hourly_cost) * num(p.capture_rate);
+    const pdeGross = gross * num(p.pde_share);
+    const pdeNet = pdeGross - num(p.review_hours_per_year);
+    const tsaNet = gross - pdeGross;
+
     const target = num(p.opex_base) * num(p.savings_target_rate);
-    const realizations = [0, 0.5, 1];
-    const shares = [0, 0.001, 0.01, 0.05, 1];
+    const savBase = target * num(p.attributable_share_base);
+    const netBase = timeBenefit + savBase - runAnnual;
+    const roiBase = runAnnual > EPS ? netBase / runAnnual : null;
+    const breakeven = target > EPS ? Math.max(0, (runAnnual - timeBenefit) / target) : null;
+    const savTarget = target * num(p.attributable_share_target);
+    const netTarget = timeBenefit + savTarget - runAnnual;
+    const roiTarget = runAnnual > EPS ? netTarget / runAnnual : null;
+
+    const perUser = last.users > EPS ? runAnnual / last.users : null;
+    const perMessage = num(p.messages_per_month) > EPS ? runAnnual / (num(p.messages_per_month) * 12) : null;
+    const perRun = num(p.runs_per_month) > EPS ? runAnnual / (num(p.runs_per_month) * 12) : null;
+    const perTerminal = num(p.terminals) > EPS ? runAnnual / num(p.terminals) : null;
+    const storageRunAnnual = lineAmount(last, 'storage_dataverse') * 12;
+    const licensesPARunAnnual = lineAmount(last, 'license_pa_premium') * 12;
+    const creditsEURRunAnnual = last.billing.mode === 'prepaid' ? last.billing.prepaidEUR * 12 : last.billing.paygEUR * 12;
+
+    return {
+      proj, last, year1, runAnnual, tco: proj.total,
+      fixedRunAnnual: last.fixedTotal * 12, variableRunAnnual: last.variableTotal * 12,
+      baseline, gross, netH, timeBenefit, pdeGross, pdeNet, tsaNet,
+      target, netBase, roiBase, breakeven, netTarget, roiTarget,
+      creditsYear: last.credits.totalCredits * 12, creditsEURRunAnnual,
+      storageRunAnnual, licensesPARunAnnual,
+      perUser, perMessage, perRun, perTerminal,
+      usersRun: last.users, gbRun: last.gb
+    };
+  }
+
+  function applyVolumeFactor(p, factor) {
+    const q = clone(p);
+    q.messages_per_month = num(q.messages_per_month) * factor;
+    q.runs_per_month = num(q.runs_per_month) * factor;
+    q.ai_builder_items_per_month = num(q.ai_builder_items_per_month) * factor;
+    return q;
+  }
+
+  function scenarios(rawParams, statuses) {
+    return CATALOG.SCENARIOS.map(sc => {
+      const s = summarize(applyVolumeFactor(rawParams || {}, sc.volumeFactor), statuses);
+      return { id: sc.id, label: sc.label, volumeFactor: sc.volumeFactor, runAnnual: s.runAnnual, tco: s.tco, netBase: s.netBase, roiBase: s.roiBase };
+    });
+  }
+
+  function sensitivity(rawParams, driverId, values, statuses) {
+    return values.map(v => {
+      const q = clone(rawParams || {});
+      q[driverId] = v;
+      const s = summarize(q, statuses);
+      return { value: v, runAnnual: s.runAnnual, netBase: s.netBase, roiBase: s.roiBase, res: s };
+    });
+  }
+
+  function savingsGrid(rawParams, realizations, shares, statuses) {
+    const p = Object.assign(collectDefaults(), rawParams || {});
+    const target = num(p.opex_base) * num(p.savings_target_rate);
     return shares.map(share => {
       const row = { share };
       for (const real of realizations) {
-        const q = clone(p);
-        const res = compute(q);
+        const s = summarize(p, statuses);
         const savings = target * real * share;
-        const net = res.benefits.timeBenefit + savings - res.results.annualCost;
-        const roi = res.results.annualCost > EPS ? net / res.results.annualCost : null;
-        row['real_' + real] = { savings, net, roi };
+        const net = s.timeBenefit + savings - s.runAnnual;
+        row['real_' + real] = { savings, net, roi: s.runAnnual > EPS ? net / s.runAnnual : null };
       }
       return row;
     });
   }
 
-  function sourcesTable(p, res) {
-    return DEFAULTS.PARAMS.map(def => ({
-      id: def.id,
-      label: def.label,
-      value: p[def.id] !== undefined ? p[def.id] : def.value,
-      unit: def.unit || '',
-      source: def.source || '',
-      status: def.status || '',
-      link: def.link || '',
-      note: def.note || ''
+  function validateFixture(f) {
+    const checks = [];
+    const eq = (key, actual, expected, tol) => {
+      const t = tol === undefined ? 1e-6 : tol;
+      const ok = Number.isFinite(actual) && Math.abs(actual - expected) <= t * Math.max(1, Math.abs(expected));
+      checks.push({ key, expected, actual, ok });
+    };
+    const s = summarize(f.params, f.statuses);
+    const e = f.expected;
+    eq('runAnnual (coût annuel run-rate)', s.runAnnual, e.runAnnual);
+    eq('Crédits / an', s.creditsYear, e.creditsYear);
+    eq('Coût crédits € run-rate', s.creditsEURRunAnnual, e.creditsEUR_runAnnual);
+    eq('Licences PA € run-rate', s.licensesPARunAnnual, e.licensesPA_runAnnual);
+    eq('Stockage € run-rate (maturité)', s.storageRunAnnual, e.storage_runAnnual);
+    eq('Stockage annualisé année 3', lineAmount(computeMonth(f.params, 36, f.statuses), 'storage_dataverse') * 12, e.storage_annualizedYear3);
+    eq('Bénéfice temps €/an', s.timeBenefit, e.timeBenefit);
+    eq('Gain net amont (h)', s.pdeNet, e.pdeNet);
+    eq('Gain net aval (h)', s.tsaNet, e.tsaNet);
+    eq('Valeur nette base €', s.netBase, e.netBase);
+    eq('ROI base', s.roiBase, e.roiBase);
+    eq('Part au point mort', s.breakeven, e.breakevenShare, 1e-4);
+    eq('Valeur nette scénario cible €', s.netTarget, e.netTarget);
+    eq('ROI scénario cible', s.roiTarget, e.roiTarget);
+    if (e.sens) {
+      for (const sens of e.sens) {
+        const q = clone(f.params);
+        q.messages_per_month = sens.messages_per_month;
+        const rs = summarize(q, f.statuses);
+        eq('Sensibilité messages=' + Math.round(sens.messages_per_month * 12) + '/an → run-rate €', rs.runAnnual, sens.runAnnual);
+      }
+    }
+    return { fixture: f, checks, ok: checks.every(c => c.ok) };
+  }
+
+  function validateAll() {
+    return (FIXTURES ? FIXTURES.FIXTURES : []).map(validateFixture);
+  }
+
+  function sourcesTable(p) {
+    return CATALOG.PRICES.map(pr => ({
+      id: pr.id, label: pr.label, value: p && p[pr.id] !== undefined ? p[pr.id] : pr.price,
+      unit: pr.unit, currency: pr.currency || '', source: pr.source, status: pr.status, link: pr.link || '', note: pr.note || ''
     }));
   }
 
-  return { compute, sensitivity, sensitivityGrid, standardSensitivities, savingsGridFixed, sourcesTable, clone, num };
+  return {
+    computeMonth, project, summarize, annualizedAtMonth, lineAmount,
+    scenarios, sensitivity, savingsGrid, applyVolumeFactor,
+    validateFixture, validateAll, sourcesTable, collectDefaults, clone, num
+  };
 });
