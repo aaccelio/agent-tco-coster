@@ -50,7 +50,7 @@ js/catalog.js         price catalog + volume drivers + cost lines + 16 component
 js/fixtures.js        validation fixtures (PDE→TSA example + expected workbook values)
 js/model.js           engine: computeMonth / project / summarize / scenarios / sensitivity / validateFixture
 js/app.js             UI controller (7 tabs, live recompute, exports)
-test/                 model.test.js, fixture.test.js, ui.smoke.js
+test/                model.test.js, fixture.test.js, ui.smoke.js
 ```
 
 ## Cost decomposition axes
