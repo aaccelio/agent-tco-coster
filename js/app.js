@@ -181,23 +181,6 @@
       <p class="legend">La cible de savings est un objectif, pas un acquis : cas de base à ${fmtPct(p.attributable_share_base)}, 100 % n'est qu'une borne illustrative.</p>`;
   }
 
-  function renderValidation() {
-    const results = M.validateAll();
-    let html = '<h2>Validation — l\'exemple PDE→TSA ne sert qu\'à prouver que le moteur générique calcule juste</h2>';
-    for (const r of results) {
-      const rows = r.checks.map(c => `<tr>
-        <td>${c.key}</td>
-        <td class="num">${typeof c.expected === 'number' ? fmtN(c.expected, 6) : c.expected}</td>
-        <td class="num">${typeof c.actual === 'number' ? fmtN(c.actual, 6) : c.actual}</td>
-        <td><span class="badge ${c.ok ? 'ok' : 'ko'}">${c.ok ? 'OK' : 'ÉCART'}</span></td>
-      </tr>`).join('');
-      html += `<div class="panel"><h3>${r.fixture.name} — ${r.ok ? '<span class="badge ok">TOUS LES CONTRÔLES PASSENT</span>' : '<span class="badge ko">ÉCARTS DÉTECTÉS</span>'}</h3>
-        <p class="legend">${r.fixture.note}</p>
-        <table><tr><th>Contrôle</th><th class="num">Attendu (classeur)</th><th class="num">Calculé (moteur)</th><th>Statut</th></tr>${rows}</table></div>`;
-    }
-    content.innerHTML = html;
-  }
-
   function renderSources() {
     const rows = M.sourcesTable(state.params).map(s => `<tr>
       <td>${s.id}</td><td>${s.label}</td>
@@ -227,7 +210,6 @@
     volumes: renderVolumes,
     projection: renderProjection,
     scenarios: renderScenarios,
-    validation: renderValidation,
     sources: renderSources
   };
 
