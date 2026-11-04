@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent TCO — Copilot Studio stack cost model</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="title-block">
+    <h1>Agent TCO — generic cost model for the Copilot Studio stack</h1>
+    <p class="subtitle">Cost = sourced unit prices × volume drivers × retained baseline components, projected month by month. The PDE→TSA workbook is used only as a validation fixture, never as the model. Every price carries a source and a verification status — no invented numbers.</p>
+  </div>
+  <div class="actions">
+    <button id="btn-export-json" title="Download inputs + results as JSON">Export JSON</button>
+    <button id="btn-export-csv" title="Download the run-rate cost lines as CSV">Export CSV</button>
+    <button id="btn-export-md" title="Download a Markdown report">Export report (.md)</button>
+    <button id="btn-reset" class="secondary" title="Restore catalog defaults">Reset defaults</button>
+  </div>
+</header>
+
+<nav class="tabs" id="tabs">
+  <button data-tab="prices">1 · Price catalog</button>
+  <button data-tab="components">2 · Baseline — 16 components</button>
+  <button data-tab="volumes" class="active">3 · Volumes &amp; growth</button>
+  <button data-tab="projection">4 · Projection / TCO</button>
+  <button data-tab="scenarios">5 · Scenarios &amp; sensitivities</button>
+  <button data-tab="validation">6 · Validation (PDE→TSA fixture)</button>
+  <button data-tab="sources">7 · Sources &amp; limits</button>
+</nav>
+
+<main id="content"></main>
+
+<footer class="footer">
+  <span>Baseline rule: never announce a price, quota, license or region without proof — “to verify” items need a targeted test in the tenant before committing.</span>
+</footer>
+
+<script src="js/catalog.js"></script>
+<script src="js/fixtures.js"></script>
+<script src="js/model.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
