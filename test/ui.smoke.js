@@ -62,8 +62,10 @@ const inputHandlers = content.listeners['input'] || [];
 assert.strictEqual(inputHandlers.length, 1, 'input handler registered');
 goTab('projection');
 const before = content.innerHTML;
+inputHandlers[0]({ target: { closest: sel => (String(sel).includes('data-price') ? { dataset: { price: 'credits_per_1k_input' }, value: '1.5' } : null) } });
 inputHandlers[0]({ target: { closest: sel => (String(sel).includes('data-driver') ? { dataset: { driver: 'messages_per_month' }, value: '50000' } : null) } });
-assert.ok(content.innerHTML !== before || true, 'input handled');
+inputHandlers[0]({ target: { closest: sel => (String(sel).includes('data-driver') ? { dataset: { driver: 'meta_prompt_tokens' }, value: '800' } : null) } });
+assert.ok(content.innerHTML !== before, 'editing price+driver re-renders projection with non-zero cost');
 assert.ok(content.innerHTML.includes('Run-rate annuel'), 'projection still renders after edit');
 
 for (const btn of ['btn-export-json', 'btn-export-csv', 'btn-export-md', 'btn-reset']) {
