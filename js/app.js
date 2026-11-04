@@ -1,150 +1,141 @@
 (function () {
-  const D = window.AgentCostDefaults;
+  const C = window.AgentCostCatalog;
   const M = window.AgentCostModel;
 
   const state = {
-    params: D.collectDefaults(),
-    statuses: Object.fromEntries(D.COMPONENTS.map(c => [c.id, c.status])),
-    tab: 'hypotheses',
-    res: null
+    params: C.collectDefaults(),
+    statuses: Object.fromEntries(C.COMPONENTS.map(c => [c.id, c.status])),
+    tab: 'volumes',
+    sum: null
   };
 
   const content = document.getElementById('content');
   const eur = new Intl.NumberFormat('en-IE', { style: 'currency', currency: 'EUR', maximumFractionDigits: 2 });
-  const numFmt = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 });
-  const intFmt = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
-
   const fmtEUR = v => v === null || v === undefined || !Number.isFinite(v) ? '—' : eur.format(v);
   const fmtN = (v, d = 2) => v === null || v === undefined || !Number.isFinite(v) ? '—' : new Intl.NumberFormat('en-US', { maximumFractionDigits: d }).format(v);
-  const fmtPct = v => v === null || !Number.isFinite(v) ? '—' : (v * 100).toFixed(2) + '%';
+  const fmtPct = v => v === null || v === undefined || !Number.isFinite(v) ? '—' : (v * 100).toFixed(2) + '%';
   const fmtROI = v => v === null || !Number.isFinite(v) ? '—' : (v * 100).toFixed(1) + '%';
 
-  function recompute() {
-    state.res = M.compute(state.params, state.statuses);
-  }
-
-  function statusBadge(s) {
-    const labels = { provided: 'provided', hypothesis: 'hypothesis', 'to-verify': 'to verify', app: 'app' };
+  const badge = s => {
+    const labels = { provided: 'fourni', hypothesis: 'hypothèse', 'to-verify': 'à vérifier', app: 'app' };
     return `<span class="badge ${s}">${labels[s] || s}</span>`;
+  };
+
+  function recompute() {
+    state.sum = M.summarize(state.params, state.statuses);
   }
 
-  function fieldHtml(def) {
+  function fieldHtml(def, kind) {
     const v = state.params[def.id];
+    const attr = kind === 'price' ? 'data-price' : 'data-driver';
     const input = def.type === 'select'
-      ? `<select data-param="${def.id}">${def.options.map(o => `<option value="${o}" ${String(o) === String(v) ? 'selected' : ''}>${o}</option>`).join('')}</select>`
-      : `<input type="number" data-param="${def.id}" value="${v}" min="${def.min !== undefined ? def.min : ''}" max="${def.max !== undefined ? def.max : ''}" step="${def.step || 'any'}">`;
+      ? `<select ${attr}="${def.id}">${def.options.map(o => `<option value="${o}" ${String(o) === String(v) ? 'selected' : ''}>${o}</option>`).join('')}</select>`
+      : `<input type="number" ${attr}="${def.id}" value="${v}" min="${def.min !== undefined ? def.min : ''}" max="${def.max !== undefined ? def.max : ''}" step="${def.step || 'any'}">`;
     const link = def.link ? ` · <a href="${def.link}" target="_blank" rel="noopener" style="color:var(--accent)">doc</a>` : '';
     return `<div class="field">
       <label>${def.label}</label>
-      <div class="meta">${input} <span class="unit">${def.unit || ''}</span> ${statusBadge(def.status)}${link}</div>
+      <div class="meta">${input} <span class="unit">${def.unit || ''}</span> ${badge(def.status)}${link}</div>
       ${def.note ? `<div class="note">${def.note}</div>` : ''}
     </div>`;
   }
 
-  function renderHypotheses() {
-    let html = '<h2>Hypotheses — every model parameter, with its source and verification status</h2>';
-    for (const g of D.GROUPS) {
-      const params = D.PARAMS.filter(p => p.group === g.id);
-      if (!params.length) continue;
-      html += `<div class="panel"><h3>${g.label}</h3><div class="grid">${params.map(fieldHtml).join('')}</div></div>`;
+  function renderPrices() {
+    let html = '<h2>Catalogue de prix — la seule source de chiffres durs, chacun sourcé et statuté</h2>';
+    for (const g of C.PRICE_GROUPS) {
+      const items = C.PRICES.filter(p => p.group === g.id);
+      if (!items.length) continue;
+      html += `<div class="panel"><h3>${g.label}</h3><div class="grid">${items.map(p => fieldHtml(p, 'price')).join('')}</div></div>`;
     }
     content.innerHTML = html;
   }
 
-  function renderCalc() {
-    const r = state.res;
-    const b = r.benefits;
-    let rows = '';
-    rows += `<tr><td>Baseline time (analyses × hours)</td><td class="num">${fmtN(b.baselineHours, 1)} h</td><td class="formula">${state.params.manual_analyses_per_year} × ${state.params.hours_per_analysis}</td></tr>`;
-    rows += `<tr><td>Gross gain (× avoidable share)</td><td class="num">${fmtN(b.grossGain, 3)} h</td><td class="formula">× ${fmtPct(state.params.avoidable_share)}</td></tr>`;
-    rows += `<tr><td>— upstream (PDE) gross / net after review</td><td class="num">${fmtN(b.pdeGross, 3)} / ${fmtN(b.pdeNet, 3)} h</td><td class="formula">review ${fmtN(b.reviewHours, 1)} h subtracted once, on PDE only</td></tr>`;
-    rows += `<tr><td>— downstream (TSA) gross / net</td><td class="num">${fmtN(b.tsaGross, 3)} / ${fmtN(b.tsaNet, 3)} h</td><td class="formula"></td></tr>`;
-    rows += `<tr><td>Time benefit captured</td><td class="num">${fmtEUR(b.timeBenefit)}/yr</td><td class="formula">${fmtN(b.netChain, 1)} h × ${state.params.loaded_hourly_cost} €/h × ${fmtPct(state.params.capture_rate)}</td></tr>`;
-
-    const c = r.credits;
-    let tokLine = '';
-    if (state.params.token_mode === 'split') {
-      const t = c.tokenDetail;
-      tokLine = `<tr><td>Token split per message (input = meta ${fmtN(t.meta, 0)} + RAG ${fmtN(t.rag, 0)} + history ${fmtN(t.hist, 0)} + user ${fmtN(t.user, 0)}; output ${fmtN(t.out, 0)})</td><td class="num">in ${fmtN(c.tokensInput, 0)} / out ${fmtN(c.tokensOutput, 0)}</td><td class="formula">× ${fmtN(c.aiCalls, 0)} calls/yr</td></tr>`
-        + `<tr><td>Credits input / output / fixed</td><td class="num">${fmtN(c.creditsInput, 0)} / ${fmtN(c.creditsOutput, 0)} / ${fmtN(c.creditsFixed, 0)}</td><td class="formula">tok/1000 × credits/1k (in ${state.params.credits_per_1k_input}, out ${state.params.credits_per_1k_output})</td></tr>`;
-    } else {
-      tokLine = `<tr><td>AI tokens (legacy mode)</td><td class="num">${fmtN(c.tokensTotal, 0)} tok</td><td class="formula">${fmtN(c.aiCalls, 0)} calls × ${fmtN(state.params.tokens_per_call, 0)} tok × ${state.params.credits_per_1k_tokens} credits/1k = ${fmtN(c.creditsAI, 0)} credits</td></tr>`;
-    }
-
-    let costRows = '';
-    for (const l of r.lines.filter(l => !['timeBenefit'].includes(l.id))) {
-      costRows += `<tr><td>${l.label}${l.component ? `<span class="tag">${componentTitle(l.component)}</span>` : ''}</td><td class="num">${fmtEUR(l.amount)}</td><td class="formula">${l.formula || ''}</td></tr>`;
-    }
-    costRows += `<tr class="total"><td>Annual cost (year 1, incl. build)</td><td class="num">${fmtEUR(r.results.annualCost)}</td><td class="formula">run-rate excl. build: ${fmtEUR(r.results.annualCostRun)}/yr</td></tr>`;
-
+  function renderComponents() {
+    const s = state.sum;
+    const rows = C.COMPONENTS.map(c => {
+      const cost = c.lines.reduce((sum, lid) => sum + M.lineAmount(s.last, lid) * 12, 0);
+      return `<tr>
+        <td><strong>${c.title}</strong><div style="color:var(--muted);font-size:11px">${c.role}</div></td>
+        <td><select class="status" data-component="${c.id}">
+          ${['retenu', 'optionnel', 'à confirmer', 'écarté'].map(x => `<option ${state.statuses[c.id] === x ? 'selected' : ''}>${x}</option>`).join('')}
+        </select></td>
+        <td>${c.lines.length ? c.lines.map(lid => C.lineById(lid).label).join('<br>') : '<span style="color:var(--muted)">aucune ligne de coût directe</span>'}</td>
+        <td class="num">${cost ? fmtEUR(cost) + '/an' : '—'}</td>
+      </tr>`;
+    }).join('');
     content.innerHTML = `
-      <h2>Detailed annual calculation</h2>
-      <div class="panel"><h3>Benefits (baseline → net gain)</h3><table>${rows}</table></div>
-      <div class="panel"><h3>Consumption — tokens in/out, meta prompt, credits</h3><table>
-        <tr><td>AI calls per year (unresolved lines × passes)</td><td class="num">${fmtN(c.aiCalls, 0)}</td><td class="formula">${fmtN(state.params.unresolved_lines_per_pass, 0)} × ${state.params.passes_per_year}</td></tr>
-        ${tokLine}
-        <tr><td>Agent-flow action credits / AI Builder credits</td><td class="num">${fmtN(c.agentActionCredits, 2)} / ${fmtN(c.aiBuilderCredits, 2)}</td><td class="formula">${state.params.agent_flow_actions_per_pass} × ${state.params.passes_per_year} × ${state.params.credits_per_agent_action}; ${fmtN(state.params.ai_builder_items_per_year, 0)} × ${state.params.ai_builder_credits_per_item}</td></tr>
-        <tr><td>Total Copilot Credits / year</td><td class="num">${fmtN(c.totalCredits, 0)}</td><td class="formula">PAYG: ${fmtEUR(c.creditsCostPaygEUR)} · prepaid ${fmtN(c.packsPerMonth, 0)} pack(s)/mo: ${fmtEUR(c.creditsCostPrepaidEUR)}</td></tr>
-      </table></div>
-      <div class="panel"><h3>Annual cost lines</h3><table>${costRows}</table>
-      <p class="legend">Cost lines of components marked “écarté” in tab 5 are zeroed. Credits total already includes agent-flow and AI Builder credits; their rows are shown for traceability only.</p></div>`;
+      <h2>Baseline technique — les 16 composants autorisés</h2>
+      <p class="legend">« Présent dans la stack » ≠ « requis ». <em>écarté</em> met à zéro les lignes de coût du composant ; <em>à confirmer</em> = à prouver dans le tenant avant go-live.</p>
+      <div class="panel"><table>
+        <tr><th>Composant (titre exact du baseline)</th><th>Statut</th><th>Lignes de coût pilotées</th><th class="num">Coût run-rate</th></tr>
+        ${rows}
+      </table></div>`;
   }
 
-  function componentTitle(id) {
-    const c = D.COMPONENTS.find(c => c.id === id);
-    return c ? c.title.split('–')[0].trim() : id;
+  function renderVolumes() {
+    let html = '<h2>Volumes & croissance — les seules entrées métier (mesurables sur un pilote)</h2>';
+    for (const g of C.DRIVER_GROUPS) {
+      const items = C.DRIVERS.filter(d => d.group === g.id);
+      if (!items.length) continue;
+      html += `<div class="panel"><h3>${g.label}</h3><div class="grid">${items.map(d => fieldHtml(d, 'driver')).join('')}</div></div>`;
+    }
+    content.innerHTML = html;
   }
 
-  function barChart(items, maxV) {
-    const max = maxV !== undefined ? maxV : Math.max(...items.map(i => Math.abs(i.value)), 1);
+  function barChart(items) {
+    const max = Math.max(...items.map(i => Math.abs(i.value)), 1);
     return `<div class="chart">${items.map(i => `
       <div class="bar-row"><div>${i.label}</div>
       <div class="bar-track"><div class="bar-fill" style="width:${Math.max(0.5, Math.abs(i.value) / max * 100)}%;background:${i.color || 'var(--accent)'}"></div></div>
       <div class="bar-val">${i.valText}</div></div>`).join('')}</div>`;
   }
 
-  function renderSummary() {
-    const r = state.res, res = r.results;
+  function renderProjection() {
+    const s = state.sum;
     const kpis = `
-      <div class="kpi"><div class="k">Annual cost (year 1)</div><div class="v">${fmtEUR(res.annualCost)}</div><div class="s">run-rate excl. one-time build: ${fmtEUR(res.annualCostRun)}/yr · ${fmtEUR(res.monthlyCost)}/mo</div></div>
-      <div class="kpi"><div class="k">Time benefit captured</div><div class="v">${fmtEUR(r.benefits.timeBenefit)}/yr</div><div class="s">${fmtN(r.benefits.netChain, 1)} net hours of ${fmtN(r.benefits.baselineHours, 0)} h baseline</div></div>
-      <div class="kpi"><div class="k">Net value — base case</div><div class="v ${res.netBase >= 0 ? 'good' : 'bad'}">${fmtEUR(res.netBase)}/yr</div><div class="s">ROI ${fmtROI(res.roiBase)} · savings attributed: ${fmtPct(state.params.attributable_share_base)}</div></div>
-      <div class="kpi"><div class="k">Breakeven attribution</div><div class="v">${fmtPct(res.breakevenShare)}</div><div class="s">min share of the ${fmtEUR(res.targetSavings)} target needed to break even on time alone</div></div>
-      <div class="kpi"><div class="k">Target scenario (${fmtPct(state.params.attributable_share_target)} attributed)</div><div class="v ${res.netTarget >= 0 ? 'good' : 'bad'}">${fmtEUR(res.netTarget)}/yr</div><div class="s">ROI ${fmtROI(res.roiTarget)} · benefit/cost ${fmtN(res.benefitCostTarget, 2)}×</div></div>
-      <div class="kpi"><div class="k">Unit economics</div><div class="v" style="font-size:14px">${fmtEUR(res.costPerAICall)}/call</div><div class="s">${fmtEUR(res.costPer1kTokens)}/1k tok · ${fmtEUR(res.costPerUser)}/user · ${fmtEUR(res.costPerTerminal)}/terminal</div></div>`;
+      <div class="kpi"><div class="k">Coût année 1</div><div class="v">${fmtEUR(s.year1.total)}</div><div class="s">fixe ${fmtEUR(s.year1.fixed)} · variable ${fmtEUR(s.year1.variable)}</div></div>
+      <div class="kpi"><div class="k">Run-rate annuel (fin d'horizon)</div><div class="v">${fmtEUR(s.runAnnual)}</div><div class="s">fixe ${fmtEUR(s.fixedRunAnnual)} · variable ${fmtEUR(s.variableRunAnnual)}</div></div>
+      <div class="kpi"><div class="k">TCO sur ${state.params.horizon_years} ans</div><div class="v">${fmtEUR(s.tco)}</div><div class="s">${s.proj.monthsN} mois projetés</div></div>
+      <div class="kpi"><div class="k">Crédits Copilot / an (run-rate)</div><div class="v" style="font-size:16px">${fmtN(s.creditsYear, 0)}</div><div class="s">${fmtEUR(s.creditsEURRunAnnual)}/an en mode ${state.params.billing_mode}${state.params.billing_mode === 'compare' ? ` (PAYG ${fmtEUR(s.last.billing.paygEUR * 12)} · prepaid ${fmtEUR(s.last.billing.prepaidEUR * 12)})` : ''}</div></div>
+      <div class="kpi"><div class="k">Stockage Dataverse run-rate</div><div class="v" style="font-size:16px">${fmtN(s.gbRun, 1)} Go</div><div class="s">${fmtEUR(s.storageRunAnnual)}/an</div></div>
+      <div class="kpi"><div class="k">Économie unitaire</div><div class="v" style="font-size:14px">${fmtEUR(s.perMessage)}/msg</div><div class="s">${fmtEUR(s.perUser)}/user · ${fmtEUR(s.perRun)}/run${s.perTerminal ? ' · ' + fmtEUR(s.perTerminal) + '/terminal' : ''}</div></div>`;
 
-    const costItems = r.lines.filter(l => l.id !== 'timeBenefit' && l.amount !== 0)
-      .map(l => ({ label: l.label.length > 42 ? l.label.slice(0, 42) + '…' : l.label, value: l.amount, valText: fmtEUR(l.amount) }));
+    const yearRows = s.proj.years.map(y => `<tr><td>Année ${y.year}</td><td class="num">${fmtN(y.credits, 0)}</td><td class="num">${fmtEUR(y.creditsEUR)}</td><td class="num">${fmtEUR(y.fixed)}</td><td class="num">${fmtEUR(y.variable)}</td><td class="num"><strong>${fmtEUR(y.total)}</strong></td></tr>`).join('');
 
-    const split = `
+    const compRows = C.COMPONENTS.filter(c => c.lines.length).map(c => {
+      const cost = c.lines.reduce((sum, lid) => sum + M.lineAmount(s.last, lid) * 12, 0);
+      return { label: c.title, value: cost, valText: fmtEUR(cost) };
+    }).filter(x => x.value !== 0);
+
+    const lineRows = s.last.lines.map(l => `<tr><td>${l.label}${l.component ? `<span class="tag">${C.COMPONENTS.find(c => c.id === l.component)?.title.split('–')[0].trim() || l.component}</span>` : ''}</td><td>${l.behavior}</td><td class="num">${fmtEUR(l.amount)}/mois</td><td class="num">${fmtEUR(l.amount * 12)}/an</td><td class="formula">${l.formula}</td></tr>`).join('');
+
+    const roiBlock = `
       <div class="two-col">
-        <div class="panel"><h3>Upstream (PDE) — precursor</h3>
+        <div class="panel"><h3>Bénéfices & résultat (run-rate)</h3>
           <table>
-            <tr><td>Net gain after review</td><td class="num">${fmtN(r.benefits.pdeNet, 3)} h</td></tr>
-            <tr><td>Benefit captured</td><td class="num">${fmtEUR(r.benefits.pdeBenefit)}</td></tr>
-            <tr><td>Direct AI cost</td><td class="num">${fmtEUR(res.costPDE)}</td></tr>
-            <tr class="total"><td>Result alone</td><td class="num" style="color:${res.resultPDE >= 0 ? 'var(--good)' : 'var(--bad)'}">${fmtEUR(res.resultPDE)}</td></tr>
+            <tr><td>Baseline manuel</td><td class="num">${fmtN(s.baseline, 0)} h/an</td></tr>
+            <tr><td>Gain brut (× ${fmtPct(state.params.avoidable_share)}) − revue ${fmtN(state.params.review_hours_per_year, 0)} h</td><td class="num">${fmtN(s.netH, 2)} h</td></tr>
+            <tr><td>Bénéfice temps capté</td><td class="num">${fmtEUR(s.timeBenefit)}/an</td></tr>
+            <tr><td>Split amont / aval (h)</td><td class="num">${fmtN(s.pdeNet, 3)} / ${fmtN(s.tsaNet, 3)}</td></tr>
+            <tr><td>Cible savings (${fmtEUR(state.params.opex_base)} × ${fmtPct(state.params.savings_target_rate)})</td><td class="num">${fmtEUR(s.target)}/an</td></tr>
+            <tr class="total"><td>Valeur nette — base (part attribuée ${fmtPct(state.params.attributable_share_base)})</td><td class="num" style="color:${s.netBase >= 0 ? 'var(--good)' : 'var(--bad)'}">${fmtEUR(s.netBase)}/an · ROI ${fmtROI(s.roiBase)}</td></tr>
+            <tr><td>Point mort (part minimale de la cible)</td><td class="num">${fmtPct(s.breakeven)}</td></tr>
+            <tr class="total"><td>Scénario cible (part ${fmtPct(state.params.attributable_share_target)})</td><td class="num" style="color:${s.netTarget >= 0 ? 'var(--good)' : 'var(--bad)'}">${fmtEUR(s.netTarget)}/an · ROI ${fmtROI(s.roiTarget)}</td></tr>
           </table></div>
-        <div class="panel"><h3>Downstream (TSA) — consumer + shared base</h3>
-          <table>
-            <tr><td>Net gain</td><td class="num">${fmtN(r.benefits.tsaNet, 3)} h</td></tr>
-            <tr><td>Benefit captured</td><td class="num">${fmtEUR(r.benefits.tsaBenefit)}</td></tr>
-            <tr><td>Licenses + shared base</td><td class="num">${fmtEUR(res.costTSAShared)}</td></tr>
-            <tr class="total"><td>Result alone</td><td class="num" style="color:${res.resultTSA >= 0 ? 'var(--good)' : 'var(--bad)'}">${fmtEUR(res.resultTSA)}</td></tr>
-          </table></div>
+        <div class="panel"><h3>Coût run-rate par composant (16 baseline)</h3>
+        ${compRows.length ? barChart(compRows) : '<p class="legend">Aucune ligne active — voir onglet Composants.</p>'}</div>
       </div>`;
 
     content.innerHTML = `
-      <h2>Consolidated result</h2>
+      <h2>Projection — découper et anticiper le coût</h2>
       <div class="kpis">${kpis}</div>
-      <div class="panel" style="margin-top:16px"><h3>Annual cost breakdown</h3>
-        ${costItems.length ? barChart(costItems) : '<p class="legend">No cost lines active — check component statuses in tab 5.</p>'}
+      <div class="panel" style="margin-top:16px"><h3>Projection annuelle</h3>
+        <table><tr><th>Année</th><th class="num">Crédits</th><th class="num">Crédits €</th><th class="num">Fixe €</th><th class="num">Variable €</th><th class="num">Total €</th></tr>${yearRows}
+        <tr class="total"><td>TCO ${state.params.horizon_years} ans</td><td class="num">${fmtN(s.proj.years.reduce((a, y) => a + y.credits, 0), 0)}</td><td class="num">${fmtEUR(s.proj.years.reduce((a, y) => a + y.creditsEUR, 0))}</td><td></td><td></td><td class="num">${fmtEUR(s.tco)}</td></tr></table>
+        ${barChart(s.proj.years.map(y => ({ label: 'Année ' + y.year, value: y.total, valText: fmtEUR(y.total) })))}
       </div>
-      ${split}
-      <div class="panel"><h3>Dataverse capacity trajectory</h3>
-        <table><tr><th>Year</th><th class="num">Cumulative capacity (Go)</th><th class="num">Annual cost</th></tr>
-        ${r.storage.trajectory.map(t => `<tr><td>${t.year}</td><td class="num">${fmtN(t.capacityGB, 1)}</td><td class="num">${fmtEUR(t.annualCost)}</td></tr>`).join('')}
-        <tr class="total"><td>Run-rate at year ${r.storage.maturityYears} (used in TCO)</td><td class="num">${fmtN(r.storage.capacityAtMaturity, 1)} Go</td><td class="num">${fmtEUR(r.storage.storageCostEUR)}</td></tr></table></div>`;
+      <div class="panel"><h3>Détail des lignes de coût (run-rate, dernier mois)</h3>
+        <table><tr><th>Ligne</th><th>Comportement</th><th class="num">/mois</th><th class="num">/an</th><th>Formule</th></tr>${lineRows}</table></div>
+      ${roiBlock}`;
   }
 
   function sensTable(title, headers, rows) {
@@ -152,107 +143,91 @@
       ${rows.map(row => `<tr>${headers.map(h => `<td class="${h.num ? 'num' : ''}">${row[h.key]}</td>`).join('')}</tr>`).join('')}</table></div>`;
   }
 
-  function renderSensitivity() {
+  function renderScenarios() {
     const p = state.params;
-    const s = M.standardSensitivities(p);
-    const grid = M.savingsGridFixed(p);
+    const sc = M.scenarios(p, state.statuses);
+    const scRows = sc.map(x => ({ sc: x.label, run: fmtEUR(x.runAnnual), tco: fmtEUR(x.tco), net: fmtEUR(x.netBase), roi: fmtROI(x.roiBase) }));
 
-    const aiRows = s.aiLines.map(x => ({ calls: fmtN(x.value, 0), credits: fmtEUR(x.res.credits.creditsCostEUR), annual: fmtEUR(x['annualCost']), net: fmtEUR(x['netBase']), breakeven: fmtPct(x['breakevenShare']) }));
-    const avRows = s.avoidable.map(x => ({ share: fmtPct(x.value), hours: fmtN(x.hoursNet, 1), benefit: fmtEUR(x.timeBenefit), net: fmtEUR(x['netBase']), roi: fmtROI(x['roiBase']) }));
-    const passRows = s.passes.map(x => ({ passes: x.value, annual: fmtEUR(x['annualCost']), net: fmtEUR(x['netBase']) }));
-    const tokRows = s.tokenPrice.map(x => ({ rate: x.value, annual: fmtEUR(x['annualCost']), net: fmtEUR(x['netBase']) }));
-    const metaRows = s.metaPrompt.map(x => ({ meta: fmtN(x.value, 0), credits: fmtN(x.credits, 0), annual: fmtEUR(x['annualCost']) }));
-    const stRows = s.storageYears.map(x => ({ years: x.value, cap: fmtN(x.capacityGB, 1) + ' Go', storage: fmtEUR(x.storageEUR), annual: fmtEUR(x['annualCost']) }));
-    const licRows = s.licenses.map(x => ({ users: x.value, annual: fmtEUR(x['annualCost']), net: fmtEUR(x['netBase']) }));
-
+    const msgSens = M.sensitivity(p, 'messages_per_month', [1000, 4400, 10000, 50000], state.statuses)
+      .map(x => ({ v: fmtN(x.value, 0), run: fmtEUR(x.runAnnual), net: fmtEUR(x.netBase), roi: fmtROI(x.roiBase) }));
+    const gbSens = M.sensitivity(p, 'storage_gb_per_month', [0, 1, 5, 10], state.statuses)
+      .map(x => ({ v: fmtN(x.value, 1) + ' Go/mois', run: fmtEUR(x.runAnnual), net: fmtEUR(x.netBase) }));
+    const userSens = M.sensitivity(p, 'pa_premium_users', [0, 5, 10, 50], state.statuses)
+      .map(x => ({ v: x.value, run: fmtEUR(x.runAnnual), net: fmtEUR(x.netBase) }));
+    const rateSens = M.sensitivity(p, 'credits_per_1k_input', [0.5, 1.5, 3, 6], state.statuses)
+      .map(x => ({ v: x.value, run: fmtEUR(x.runAnnual), net: fmtEUR(x.netBase) }));
+    const grid = M.savingsGrid(p, [0, 0.5, 1], [0, 0.001, 0.01, 0.05, 1], state.statuses);
     const gridRows = grid.map(g => {
       const row = { share: fmtPct(g.share) };
-      for (const k of Object.keys(g)) if (k.startsWith('real_')) {
-        const cell = g[k];
-        row[k] = `${fmtEUR(cell.net)} (${fmtROI(cell.roi)})`;
-      }
+      for (const k of Object.keys(g)) if (k.startsWith('real_')) row[k] = `${fmtEUR(g[k].net)} (${fmtROI(g[k].roi)})`;
       return row;
     });
-    const gridHeaders = [{ key: 'share', label: 'Attributable share \\ target realized' }].concat([0, 0.5, 1].map(rr => ({ key: 'real_' + rr, label: fmtPct(rr) + ' of target', num: true })));
 
     content.innerHTML = `
-      <h2>Sensitivity analysis — vary one hypothesis at a time</h2>
+      <h2>Scénarios & sensibilités</h2>
+      ${sensTable('Scénarios de volume (multiplicateur sur messages / runs / items)', [
+        { key: 'sc', label: 'Scénario' }, { key: 'run', label: 'Run-rate annuel', num: true }, { key: 'tco', label: 'TCO horizon', num: true }, { key: 'net', label: 'Net base', num: true }, { key: 'roi', label: 'ROI', num: true }], scRows)}
       <div class="two-col">
-        ${sensTable('AI calls per pass (volume driver)', [
-          { key: 'calls', label: 'Calls/yr input' }, { key: 'credits', label: 'Credits cost', num: true },
-          { key: 'annual', label: 'Annual cost', num: true }, { key: 'net', label: 'Net (time only)', num: true }, { key: 'breakeven', label: 'Breakeven share', num: true }], aiRows)}
-        ${sensTable('Avoidable share of baseline hours', [
-          { key: 'share', label: 'Avoidable' }, { key: 'hours', label: 'Net hours', num: true }, { key: 'benefit', label: 'Benefit €/yr', num: true },
-          { key: 'net', label: 'Net €/yr', num: true }, { key: 'roi', label: 'ROI', num: true }], avRows)}
-        ${sensTable('Full passes per year', [
-          { key: 'passes', label: 'Passes/yr' }, { key: 'annual', label: 'Annual cost', num: true }, { key: 'net', label: 'Net', num: true }], passRows)}
-        ${sensTable('Credits per 1,000 tokens (price driver, legacy mode)', [
-          { key: 'rate', label: 'Credits/1k tok' }, { key: 'annual', label: 'Annual cost', num: true }, { key: 'net', label: 'Net', num: true }], tokRows)}
-        ${sensTable('MS meta/system prompt tokens per message (split mode)', [
-          { key: 'meta', label: 'Meta tokens/msg' }, { key: 'credits', label: 'Total credits/yr', num: true }, { key: 'annual', label: 'Annual cost', num: true }], metaRows)}
-        ${sensTable('Storage maturity', [
-          { key: 'years', label: 'Years' }, { key: 'cap', label: 'Capacity', num: true }, { key: 'storage', label: 'Storage €/yr', num: true }, { key: 'annual', label: 'Annual cost', num: true }], stRows)}
-        ${sensTable('Incremental Power Apps Premium users', [
-          { key: 'users', label: 'Users' }, { key: 'annual', label: 'Annual cost', num: true }, { key: 'net', label: 'Net', num: true }], licRows)}
+        ${sensTable('Messages agent / mois', [
+          { key: 'v', label: 'messages/mois' }, { key: 'run', label: 'Run-rate €', num: true }, { key: 'net', label: 'Net €', num: true }, { key: 'roi', label: 'ROI', num: true }], msgSens)}
+        ${sensTable('Croissance stockage (Go/mois)', [
+          { key: 'v', label: 'Go/mois' }, { key: 'run', label: 'Run-rate €', num: true }, { key: 'net', label: 'Net €', num: true }], gbSens)}
+        ${sensTable('Users Power Apps Premium', [
+          { key: 'v', label: 'users' }, { key: 'run', label: 'Run-rate €', num: true }, { key: 'net', label: 'Net €', num: true }], userSens)}
+        ${sensTable('Taux crédits / 1k tokens input', [
+          { key: 'v', label: 'crédits/1k tok' }, { key: 'run', label: 'Run-rate €', num: true }, { key: 'net', label: 'Net €', num: true }], rateSens)}
       </div>
-      ${sensTable('Procurement savings grid — target realization × attributable share (net value / ROI)', gridHeaders, gridRows)}
-      <p class="legend">The ${fmtEUR(state.res.results.targetSavings)} target is a goal, not an acquired gain: base case attributes ${fmtPct(p.attributable_share_base)}, 100% is an illustrative bound only.</p>`;
+      ${sensTable('Cible savings — réalisation × part attribuable (net / ROI)', [{ key: 'share', label: 'Part attribuable \\ réalisation' }].concat([0, 0.5, 1].map(r => ({ key: 'real_' + r, label: fmtPct(r), num: true }))), gridRows)}
+      <p class="legend">La cible de savings est un objectif, pas un acquis : cas de base à ${fmtPct(p.attributable_share_base)}, 100 % n'est qu'une borne illustrative.</p>`;
   }
 
-  function renderComponents() {
-    const rows = D.COMPONENTS.map(c => {
-      const activeLines = c.lines.filter(lid => {
-        const line = state.res.lines.find(l => l.id === lid);
-        return line && line.amount !== 0;
-      });
-      const cost = activeLines.reduce((s, lid) => s + state.res.lines.find(l => l.id === lid).amount, 0);
-      return `<tr>
-        <td><strong>${c.title}</strong><div class="note" style="color:var(--muted);font-size:11px">${c.role}</div></td>
-        <td><select class="status" data-component="${c.id}">
-          ${['retenu', 'optionnel', 'à confirmer', 'écarté'].map(s => `<option ${state.statuses[c.id] === s ? 'selected' : ''}>${s}</option>`).join('')}
-        </select></td>
-        <td>${c.lines.length ? c.lines.join(', ') : '<span style="color:var(--muted)">no direct cost line</span>'}</td>
-        <td class="num">${cost ? fmtEUR(cost) + '/yr' : '—'}</td>
-      </tr>`;
-    }).join('');
-    content.innerHTML = `
-      <h2>Technical baseline — the 16 authorized components to examine</h2>
-      <p class="legend">“Present in the stack” ≠ “required for this use case”. Set <em>écarté</em> to zero the cost lines of a component; <em>à confirmer</em> flags what must be proven in the tenant before go-live.</p>
-      <div class="panel"><table>
-        <tr><th>Component (exact baseline title)</th><th>Status</th><th>Cost lines driven</th><th class="num">Active cost</th></tr>
-        ${rows}
-      </table></div>`;
+  function renderValidation() {
+    const results = M.validateAll();
+    let html = '<h2>Validation — l\'exemple PDE→TSA ne sert qu\'à prouver que le moteur générique calcule juste</h2>';
+    for (const r of results) {
+      const rows = r.checks.map(c => `<tr>
+        <td>${c.key}</td>
+        <td class="num">${typeof c.expected === 'number' ? fmtN(c.expected, 6) : c.expected}</td>
+        <td class="num">${typeof c.actual === 'number' ? fmtN(c.actual, 6) : c.actual}</td>
+        <td><span class="badge ${c.ok ? 'ok' : 'ko'}">${c.ok ? 'OK' : 'ÉCART'}</span></td>
+      </tr>`).join('');
+      html += `<div class="panel"><h3>${r.fixture.name} — ${r.ok ? '<span class="badge ok">TOUS LES CONTRÔLES PASSENT</span>' : '<span class="badge ko">ÉCARTS DÉTECTÉS</span>'}</h3>
+        <p class="legend">${r.fixture.note}</p>
+        <table><tr><th>Contrôle</th><th class="num">Attendu (classeur)</th><th class="num">Calculé (moteur)</th><th>Statut</th></tr>${rows}</table></div>`;
+    }
+    content.innerHTML = html;
   }
 
   function renderSources() {
-    const rows = M.sourcesTable(state.params, state.res).map(s => `<tr>
+    const rows = M.sourcesTable(state.params).map(s => `<tr>
       <td>${s.id}</td><td>${s.label}</td>
-      <td class="num">${typeof s.value === 'number' ? fmtN(s.value, 4) : s.value} ${s.unit}</td>
-      <td>${s.source}</td><td>${statusBadge(s.status)}</td>
-      <td>${s.link ? `<a href="${s.link}" target="_blank" rel="noopener" style="color:var(--accent)">link</a>` : ''}</td>
+      <td class="num">${fmtN(s.value, 4)} ${s.unit}${s.currency ? ' (' + s.currency + ')' : ''}</td>
+      <td>${s.source}</td><td>${badge(s.status)}</td>
+      <td>${s.link ? `<a href="${s.link}" target="_blank" rel="noopener" style="color:var(--accent)">lien</a>` : ''}</td>
       <td style="color:var(--muted);font-size:11px">${s.note}</td></tr>`).join('');
     content.innerHTML = `
-      <h2>Sources &amp; limits — provenance of every number</h2>
+      <h2>Sources & limites — provenance de chaque prix</h2>
       <div class="panel"><table>
-        <tr><th>Param</th><th>Label</th><th class="num">Value</th><th>Source</th><th>Status</th><th>Ref</th><th>Limit / note</th></tr>
+        <tr><th>Prix</th><th>Libellé</th><th class="num">Valeur</th><th>Source</th><th>Statut</th><th>Réf</th><th>Limite / note</th></tr>
         ${rows}
       </table></div>
-      <div class="panel"><h3>Standing limits (from the reference model)</h3>
+      <div class="panel"><h3>Limites permanentes (règles du baseline)</h3>
       <ul style="color:var(--muted);font-size:12.5px;line-height:1.6">
-        <li>The ${fmtEUR(state.res.results.targetSavings)} savings target is a target, not a result; base case attributes 0%.</li>
-        <li>${state.params.terminals} terminals is a projection perimeter; annualized gains do not automatically apply to the pilot.</li>
-        <li>Measure on the pilot: file profiling, AI calls, real review time, the ${fmtN(state.res.benefits.baselineHours, 0)} h baseline, catalog volumes/quality.</li>
-        <li>Confirm with Finance/IT: license counts, Dataverse capacity, flows owned by the app, Copilot Studio usage, Graph file module, contract and FX — effective costs to be confirmed.</li>
-        <li>No price, quota, region or license is asserted without proof: “to verify” items need a targeted test in the tenant.</li>
+        <li>Aucun prix, quota, région, licence ou fonction n'est annoncé sans preuve : les éléments « à vérifier » nécessitent un test ciblé dans le tenant.</li>
+        <li>« Présent dans la stack » n'implique pas « requis » : seuls les composants retenus portent des lignes de coût.</li>
+        <li>Les volumes (messages, runs, Go/mois, profil de tokens) sont des hypothèses à mesurer sur le pilote, jamais des extrapolations.</li>
+        <li>Le stockage Dataverse se mesure en base + log + fichiers ; aucune économie déduite du nombre de colonnes.</li>
+        <li>La cible de savings est un objectif ; l'attribution à la solution se valide avec Procurement / Finance.</li>
       </ul></div>`;
   }
 
   const RENDERERS = {
-    hypotheses: renderHypotheses,
-    calc: renderCalc,
-    summary: renderSummary,
-    sensitivity: renderSensitivity,
+    prices: renderPrices,
     components: renderComponents,
+    volumes: renderVolumes,
+    projection: renderProjection,
+    scenarios: renderScenarios,
+    validation: renderValidation,
     sources: renderSources
   };
 
@@ -270,10 +245,11 @@
   });
 
   content.addEventListener('input', e => {
-    const el = e.target.closest('[data-param]');
+    const el = e.target.closest('[data-driver],[data-price]');
     if (el) {
-      const def = D.paramById(el.dataset.param);
-      state.params[def.id] = def.type === 'select' ? el.value : Number(el.value);
+      const id = el.dataset.driver || el.dataset.price;
+      const def = C.driverById(id) || C.priceById(id);
+      state.params[id] = def && def.type === 'select' ? el.value : Number(el.value);
       render();
       return;
     }
@@ -295,44 +271,45 @@
 
   document.getElementById('btn-export-json').addEventListener('click', () => {
     recompute();
-    download('agent-tco.json', JSON.stringify({ params: state.params, componentStatuses: state.statuses, results: state.res.results, credits: state.res.credits, benefits: state.res.benefits, lines: state.res.lines }, null, 2), 'application/json');
+    download('agent-tco.json', JSON.stringify({
+      params: state.params, componentStatuses: state.statuses,
+      summary: { runAnnual: state.sum.runAnnual, tco: state.sum.tco, year1: state.sum.year1.total, netBase: state.sum.netBase, roiBase: state.sum.roiBase },
+      runRateLines: state.sum.last.lines
+    }, null, 2), 'application/json');
   });
 
   document.getElementById('btn-export-csv').addEventListener('click', () => {
     recompute();
     const esc = v => '"' + String(v).replace(/"/g, '""') + '"';
-    const rows = [['line', 'component', 'amount_EUR_per_year', 'formula']]
-      .concat(state.res.lines.map(l => [esc(l.label), l.component, l.amount.toFixed(2), esc(l.formula)]))
-      .concat([['TOTAL annual cost (year 1)', '', state.res.results.annualCost.toFixed(2), ''], ['Net base', '', state.res.results.netBase.toFixed(2), ''], ['ROI base', '', state.res.results.roiBase === null ? '' : state.res.results.roiBase.toFixed(6), '']]);
+    const rows = [['ligne', 'composant', 'categorie', 'comportement', 'EUR_par_mois_runrate', 'EUR_par_an_runrate', 'formule']]
+      .concat(state.sum.last.lines.map(l => [esc(l.label), l.component, l.category, l.behavior, l.amount.toFixed(2), (l.amount * 12).toFixed(2), esc(l.formula)]))
+      .concat([['TOTAL run-rate annuel', '', '', '', '', state.sum.runAnnual.toFixed(2), '']]);
     download('agent-tco-lines.csv', rows.map(r => r.join(',')).join('\n'), 'text/csv');
   });
 
   document.getElementById('btn-export-md').addEventListener('click', () => {
     recompute();
-    const r = state.res;
+    const s = state.sum;
     const md = [
-      '# Agent TCO report — Copilot Studio stack', '',
-      '## Consolidated result (base case)', '',
-      `- Annual cost (year 1, incl. build): **${fmtEUR(r.results.annualCost)}** (run-rate excl. build: ${fmtEUR(r.results.annualCostRun)}/yr)`,
-      `- Time benefit captured: **${fmtEUR(r.benefits.timeBenefit)}/yr** (${fmtN(r.benefits.netChain, 1)} net h of ${fmtN(r.benefits.baselineHours, 0)} h baseline)`,
-      `- Net value: **${fmtEUR(r.results.netBase)}/yr**, ROI **${fmtROI(r.results.roiBase)}**`,
-      `- Breakeven attribution of the ${fmtEUR(r.results.targetSavings)} target: **${fmtPct(r.results.breakevenShare)}**`,
-      `- Target scenario (${fmtPct(state.params.attributable_share_target)} attributed): net **${fmtEUR(r.results.netTarget)}/yr**, ROI **${fmtROI(r.results.roiTarget)}**`,
-      `- Unit economics: ${fmtEUR(r.results.costPerAICall)}/AI call · ${fmtEUR(r.results.costPer1kTokens)}/1k tokens · ${fmtEUR(r.results.costPerUser)}/user`, '',
-      '## Cost lines', '',
-      '| Line | Component | €/yr | Formula |', '|---|---|---|---|',
-      ...r.lines.filter(l => l.id !== 'timeBenefit').map(l => `| ${l.label} | ${l.component} | ${l.amount.toFixed(2)} | ${l.formula} |`), '',
-      '## Sources & limits', '',
-      '| Param | Value | Source | Status | Note |', '|---|---|---|---|---|',
-      ...M.sourcesTable(state.params, r).map(s => `| ${s.id} | ${typeof s.value === 'number' ? fmtN(s.value, 4) : s.value} ${s.unit} | ${s.source} | ${s.status} | ${s.note} |`),
-      ''
+      '# Rapport TCO agent — Copilot Studio stack', '',
+      '## Run-rate annuel', `- Total : **${fmtEUR(s.runAnnual)}** (fixe ${fmtEUR(s.fixedRunAnnual)} · variable ${fmtEUR(s.variableRunAnnual)})`,
+      `- Année 1 : ${fmtEUR(s.year1.total)} · TCO ${state.params.horizon_years} ans : ${fmtEUR(s.tco)}`,
+      `- Crédits : ${fmtN(s.creditsYear, 0)}/an → ${fmtEUR(s.creditsEURRunAnnual)}/an`,
+      `- Stockage : ${fmtN(s.gbRun, 1)} Go → ${fmtEUR(s.storageRunAnnual)}/an`,
+      `- Économie unitaire : ${fmtEUR(s.perMessage)}/message · ${fmtEUR(s.perUser)}/user`, '',
+      '## Résultat', `- Bénéfice temps : ${fmtEUR(s.timeBenefit)}/an · net base : ${fmtEUR(s.netBase)} (ROI ${fmtROI(s.roiBase)})`,
+      `- Point mort : ${fmtPct(s.breakeven)} de la cible ${fmtEUR(s.target)} · scénario cible : ${fmtEUR(s.netTarget)} (ROI ${fmtROI(s.roiTarget)})`, '',
+      '## Lignes de coût (run-rate)', '', '| Ligne | Composant | €/an | Formule |', '|---|---|---|---|',
+      ...s.last.lines.map(l => `| ${l.label} | ${l.component} | ${(l.amount * 12).toFixed(2)} | ${l.formula} |`), '',
+      '## Prix & sources', '', '| Prix | Valeur | Source | Statut | Note |', '|---|---|---|---|---|',
+      ...M.sourcesTable(state.params).map(x => `| ${x.id} | ${fmtN(x.value, 4)} ${x.unit} | ${x.source} | ${x.status} | ${x.note} |`), ''
     ].join('\n');
     download('agent-tco-report.md', md, 'text/markdown');
   });
 
   document.getElementById('btn-reset').addEventListener('click', () => {
-    state.params = D.collectDefaults();
-    state.statuses = Object.fromEntries(D.COMPONENTS.map(c => [c.id, c.status]));
+    state.params = C.collectDefaults();
+    state.statuses = Object.fromEntries(C.COMPONENTS.map(c => [c.id, c.status]));
     render();
   });
 
