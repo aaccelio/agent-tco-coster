@@ -8,7 +8,18 @@ function close(actual, expected, tol = 1e-9, label = '') {
     `${label}: expected ${expected}, got ${actual}`);
 }
 
-const p = C.collectDefaults();
+const nullDefaults = C.collectDefaults();
+assert.ok(Object.values(nullDefaults).every(v => v === 0 || v === 'payg'), 'null initial state: all fillable fields at 0');
+assert.strictEqual(M.computeMonth(nullDefaults, 1).total, 0, 'null initial state → month cost 0');
+const nullSum = M.summarize(nullDefaults);
+assert.strictEqual(nullSum.runAnnual, 0, 'null initial state → run-rate 0');
+assert.strictEqual(nullSum.roiBase, null, 'null initial state → ROI null (no division by zero)');
+
+const p = Object.assign({}, nullDefaults, {
+  pa_premium_price: 17.3, pa_premium_users: 5, fx_eur_per_usd: 0.92,
+  payg_price_per_credit: 0.01, prepaid_pack_credits: 25000, prepaid_pack_price: 200,
+  horizon_years: 3
+});
 
 let m1 = M.computeMonth(p, 1);
 assert.ok(m1.total > 0, 'month 1 has a positive cost');
@@ -38,11 +49,16 @@ close(M.computeMonth(p4, 1).lines.find(l => l.id === 'license_pa_premium').users
 close(M.computeMonth(p4, 6).lines.find(l => l.id === 'license_pa_premium').users, 10, 1e-12, 'ramp full at month 6');
 close(M.computeMonth(p4, 12).lines.find(l => l.id === 'license_pa_premium').users, 10, 1e-12, 'ramp capped');
 
-const p5 = Object.assign({}, p, { storage_initial_gb: 10, storage_gb_per_month: 2 });
+const p5 = Object.assign({}, p, { storage_initial_gb: 10, storage_gb_per_month: 2, dataverse_price_per_gb_month: 25 });
 close(M.computeMonth(p5, 1).gb, 12, 1e-12, 'gb month 1 = initial + growth×m');
 close(M.computeMonth(p5, 12).gb, 34, 1e-12, 'gb month 12');
+close(M.lineAmount(M.computeMonth(p5, 12), 'storage_dataverse'), 34 * 25, 1e-12, 'storage cost');
 
-const p6 = Object.assign({}, p, { horizon_years: 3 });
+const p6 = Object.assign({}, p, {
+  horizon_years: 3, messages_per_month: 4400,
+  meta_prompt_tokens: 800, rag_context_tokens: 2000, history_tokens: 1000, user_input_tokens: 200, output_tokens_per_message: 400,
+  credits_per_1k_input: 1.5, credits_per_1k_output: 3
+});
 const proj = M.project(p6);
 assert.strictEqual(proj.months.length, 36, '36 months');
 assert.strictEqual(proj.years.length, 3, '3 years');
@@ -68,4 +84,4 @@ assert.ok(sens[1].runAnnual > sens[0].runAnnual, 'more messages → higher cost'
 const grid = M.savingsGrid(Object.assign({}, p6, { opex_base: 1000000, savings_target_rate: 0.05 }), [0, 1], [0, 1]);
 close(grid[1]['real_1'].savings, 50000, 1e-9, 'grid savings 100%×100%');
 
-console.log('All generic model tests passed.');
+console.log('All generic model tests passed (incl. null initial state).');
